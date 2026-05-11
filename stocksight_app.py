@@ -8,11 +8,11 @@ import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
 
-# ══════════════════════════════════════════════════
-# PAGE CONFIG
-# ══════════════════════════════════════════════════
 st.set_page_config(page_title="StockSight", page_icon="◈", layout="wide")
 
+# ══════════════════════════════════════════════════
+# STYLING
+# ══════════════════════════════════════════════════
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;600;700&display=swap');
 .stApp { background-color: #050810; }
@@ -41,64 +41,124 @@ plt.rcParams.update({
 })
 
 # ══════════════════════════════════════════════════
-# API KEY — put yours in Streamlit secrets or here
+# API KEY
 # ══════════════════════════════════════════════════
-# To use Streamlit secrets: go to your app settings on share.streamlit.io,
-# click "Advanced settings" > "Secrets", and add:
-#   FMP_API_KEY = "your_key_here"
-# Or just paste it directly below:
-
-FMP_KEY = st.secrets.get("FMP_API_KEY", "YOUR_KEY_HERE")  # ← replace YOUR_KEY_HERE if not using secrets
+try:
+    FMP_KEY = st.secrets["FMP_API_KEY"]
+except Exception:
+    FMP_KEY = None
 
 BASE = "https://financialmodelingprep.com/api/v3"
 
 # ══════════════════════════════════════════════════
-# DATA FETCHER (cached for 1 hour)
+# API CALLER — with real error messages
+# ══════════════════════════════════════════════════
+def fmp_get(endpoint):
+    """Call FMP API. Returns data or None. Shows error in app if it fails."""
+    url = f"{BASE}/{endpoint}"
+    if "apikey=" not in url:
+        url += f"{'&' if '?' in url else '?'}apikey={FMP_KEY}"
+    try:
+        r = requests.get(url, timeout=20)
+    except requests.exceptions.Timeout:
+        st.error("Request timed out. Try again.")
+        return None
+    except requests.exceptions.ConnectionError:
+        st.error("Could not connect to data provider.")
+        return None
+
+    if r.status_code == 401:
+        st.error("Invalid API key. Check your FMP_API_KEY in Streamlit secrets.")
+        return None
+    if r.status_code == 403:
+        st.error("API key does not have access to this endpoint. You may need a paid FMP plan for this data.")
+        return None
+    if r.status_code == 429:
+        st.error("Rate limited by FMP. Wait a minute and try again.")
+        return None
+    if r.status_code != 200:
+        st.error(f"API returned status {r.status_code}: {r.text[:300]}")
+        return None
+
+    data = r.json()
+
+    # FMP sometimes returns error messages inside a 200 response
+    if isinstance(data, dict) and "Error Message" in data:
+        st.error(f"FMP error: {data['Error Message']}")
+        return None
+
+    return data
+
+# ══════════════════════════════════════════════════
+# DATA PULLER — cached 1 hour
 # ══════════════════════════════════════════════════
 @st.cache_data(ttl=3600, show_spinner=False)
-def fmp_get(url):
-    r = requests.get(url, timeout=15)
-    r.raise_for_status()
-    return r.json()
+def pull_all_data(ticker, api_key):
+    """Pull all data for a ticker. Returns (data_dict, error_string)."""
+    headers_check = requests.get(f"{BASE}/profile/{ticker}?apikey={api_key}", timeout=20)
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def pull_all_data(ticker):
-    # Company profile
-    profile = fmp_get(f"{BASE}/profile/{ticker}?apikey={FMP_KEY}")
-    if not profile:
-        return None, "No data found for this ticker."
+    if headers_check.status_code != 200:
+        return None, f"API error {headers_check.status_code}: {headers_check.text[:200]}"
 
-    # Income statement (5 years)
-    income = fmp_get(f"{BASE}/income-statement/{ticker}?period=annual&limit=5&apikey={FMP_KEY}")
+    profile_data = headers_check.json()
+    if not profile_data or (isinstance(profile_data, dict) and "Error Message" in profile_data):
+        return None, f"No data found for {ticker}. Check the ticker symbol."
+
+    # Income statement
+    inc_resp = requests.get(f"{BASE}/income-statement/{ticker}?period=annual&limit=5&apikey={api_key}", timeout=20)
+    income = inc_resp.json() if inc_resp.status_code == 200 else []
+    if isinstance(income, dict):
+        income = []
+
     if not income:
-        return None, "No financial statements found."
+        return None, f"No financial statements found for {ticker}."
 
-    # Balance sheet (5 years)
-    balance = fmp_get(f"{BASE}/balance-sheet-statement/{ticker}?period=annual&limit=5&apikey={FMP_KEY}")
+    # Balance sheet
+    bal_resp = requests.get(f"{BASE}/balance-sheet-statement/{ticker}?period=annual&limit=5&apikey={api_key}", timeout=20)
+    balance = bal_resp.json() if bal_resp.status_code == 200 else []
+    if isinstance(balance, dict):
+        balance = []
 
-    # Cash flow (5 years)
-    cashflow = fmp_get(f"{BASE}/cash-flow-statement/{ticker}?period=annual&limit=5&apikey={FMP_KEY}")
+    # Cash flow
+    cf_resp = requests.get(f"{BASE}/cash-flow-statement/{ticker}?period=annual&limit=5&apikey={api_key}", timeout=20)
+    cashflow = cf_resp.json() if cf_resp.status_code == 200 else []
+    if isinstance(cashflow, dict):
+        cashflow = []
 
-    # Historical daily prices (5 years for returns)
-    prices = fmp_get(f"{BASE}/historical-price-full/{ticker}?timeseries=1260&apikey={FMP_KEY}")
+    # Stock prices (5 years daily)
+    price_resp = requests.get(f"{BASE}/historical-price-full/{ticker}?timeseries=1260&apikey={api_key}", timeout=20)
+    if price_resp.status_code == 200:
+        price_data = price_resp.json()
+        prices = price_data.get('historical', []) if isinstance(price_data, dict) else []
+    else:
+        prices = []
 
     # S&P 500 prices
-    sp500 = fmp_get(f"{BASE}/historical-price-full/^GSPC?timeseries=1260&apikey={FMP_KEY}")
+    sp_resp = requests.get(f"{BASE}/historical-price-full/%5EGSPC?timeseries=1260&apikey={api_key}", timeout=20)
+    if sp_resp.status_code == 200:
+        sp_data = sp_resp.json()
+        sp500 = sp_data.get('historical', []) if isinstance(sp_data, dict) else []
+    else:
+        sp500 = []
 
-    # Treasury rate
+    # Risk free rate (fallback to 4.5%)
+    rf = 0.045
     try:
-        treasury = fmp_get(f"{BASE}/treasury?from=2024-01-01&to=2025-12-31&apikey={FMP_KEY}")
-        rf = float(treasury[0]['year10']) / 100 if treasury else 0.045
-    except:
+        tr_resp = requests.get(f"{BASE}/treasury?from=2024-01-01&to=2026-12-31&apikey={api_key}", timeout=10)
+        if tr_resp.status_code == 200:
+            tr_data = tr_resp.json()
+            if tr_data and isinstance(tr_data, list) and len(tr_data) > 0:
+                rf = float(tr_data[0].get('year10', 4.5)) / 100
+    except Exception:
         rf = 0.045
 
     return {
-        'profile': profile[0],
+        'profile': profile_data[0] if isinstance(profile_data, list) else profile_data,
         'income': income,
-        'balance': balance or [],
-        'cashflow': cashflow or [],
-        'prices': prices.get('historical', []) if isinstance(prices, dict) else [],
-        'sp500': sp500.get('historical', []) if isinstance(sp500, dict) else [],
+        'balance': balance,
+        'cashflow': cashflow,
+        'prices': prices,
+        'sp500': sp500,
         'rf_rate': rf,
     }, None
 
@@ -131,14 +191,19 @@ def grade(val, thresholds, reverse=False):
         return 'F', RED
 
 def get_field(data_list, field, idx=0):
-    """Safely get a field from FMP response list."""
     try:
         val = data_list[idx].get(field)
-        if val is not None:
-            return float(val)
-    except:
-        pass
+        if val is not None: return float(val)
+    except Exception: pass
     return None
+
+def to_monthly_returns(daily_prices):
+    if not daily_prices: return pd.Series(dtype=float)
+    df = pd.DataFrame(daily_prices)
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date').set_index('date')
+    monthly = df['close'].resample('MS').last().dropna()
+    return monthly.pct_change().dropna()
 
 # ══════════════════════════════════════════════════
 # HEADER + INPUT
@@ -147,6 +212,11 @@ st.markdown("## ◈ StockSight")
 st.markdown("# Type a ticker. Get the truth.")
 st.markdown("Pulls real financials, runs CML + portfolio math, gives you a straight answer.")
 st.markdown("")
+
+# Check API key FIRST
+if not FMP_KEY:
+    st.error("No API key found. Go to your Streamlit app settings, click Secrets, and add:\n\nFMP_API_KEY = \"your_key_from_financialmodelingprep.com\"")
+    st.stop()
 
 col_in, col_btn = st.columns([5, 1])
 with col_in:
@@ -163,10 +233,6 @@ for i, t in enumerate(["AAPL", "TSLA", "MSFT", "AMZN", "NVDA", "GOOGL", "META", 
 
 ticker = ticker.strip().upper()
 
-if FMP_KEY == "YOUR_KEY_HERE":
-    st.warning("You need a free API key from financialmodelingprep.com. Add it to Streamlit secrets as FMP_API_KEY or paste it in the code.")
-    st.stop()
-
 if not run or not ticker:
     st.markdown("---")
     st.markdown("### What you get")
@@ -181,11 +247,16 @@ if not run or not ticker:
 # ══════════════════════════════════════════════════
 # PULL & PROCESS
 # ══════════════════════════════════════════════════
-with st.spinner(f"Analyzing {ticker}..."):
+with st.spinner(f"Analyzing {ticker}... this takes a few seconds"):
 
-    data, error = pull_all_data(ticker)
+    data, error = pull_all_data(ticker, FMP_KEY)
+
     if error:
         st.error(error)
+        st.stop()
+
+    if data is None:
+        st.error("Something went wrong pulling data. Try again.")
         st.stop()
 
     p = data['profile']
@@ -199,9 +270,10 @@ with st.spinner(f"Analyzing {ticker}..."):
     mc = p.get('mktCap', 0)
     if mc and mc > 1e12: mcs = f'${mc/1e12:.2f}T'
     elif mc and mc > 1e9: mcs = f'${mc/1e9:.1f}B'
+    elif mc and mc > 1e6: mcs = f'${mc/1e6:.0f}M'
     else: mcs = 'N/A'
 
-    # ── RATIOS from latest year ──
+    # ── RATIOS ──
     revenue = get_field(inc, 'revenue')
     gross_profit = get_field(inc, 'grossProfit')
     operating_income = get_field(inc, 'operatingIncome')
@@ -210,7 +282,8 @@ with st.spinner(f"Analyzing {ticker}..."):
     total_assets = get_field(bal, 'totalAssets')
     current_assets = get_field(bal, 'totalCurrentAssets')
     current_liabilities = get_field(bal, 'totalCurrentLiabilities')
-    total_debt = get_field(bal, 'totalDebt') or get_field(bal, 'longTermDebt')
+    total_debt = get_field(bal, 'totalDebt')
+    if total_debt is None: total_debt = get_field(bal, 'longTermDebt')
     equity = get_field(bal, 'totalStockholdersEquity')
     inventory_val = get_field(bal, 'inventory')
     fcf = get_field(cf, 'freeCashFlow')
@@ -256,16 +329,16 @@ with st.spinner(f"Analyzing {ticker}..."):
     years_list, revenues_list, net_incomes_list = [], [], []
     for row in reversed(inc[:5]):
         try:
-            yr = int(row['calendarYear']) if 'calendarYear' in row else int(row['date'][:4])
+            yr = int(row.get('calendarYear', str(row.get('date', '2024'))[:4]))
             rev = float(row.get('revenue', 0))
             ni = float(row.get('netIncome', 0))
             if rev > 0:
                 years_list.append(yr)
                 revenues_list.append(rev / 1e9)
                 net_incomes_list.append(ni / 1e9)
-        except: continue
+        except Exception: continue
 
-    n_years = len(revenues_list) - 1 if len(revenues_list) > 1 else 1
+    n_years = max(len(revenues_list) - 1, 1)
     revenue_cagr = (revenues_list[-1] / revenues_list[0]) ** (1 / n_years) - 1 if len(revenues_list) >= 2 and revenues_list[0] > 0 else 0
     yoy_growth = []
     for i in range(1, len(revenues_list)):
@@ -273,31 +346,18 @@ with st.spinner(f"Analyzing {ticker}..."):
     accelerating = len(yoy_growth) >= 2 and yoy_growth[-1] > yoy_growth[-2]
 
     # ── RETURNS & CML ──
-    stock_prices = data['prices']
-    sp500_prices = data['sp500']
+    monthly_returns = to_monthly_returns(data['prices'])
+    sp500_returns = to_monthly_returns(data['sp500'])
     rf_rate = data['rf_rate']
     if rf_rate is None or rf_rate <= 0 or rf_rate > 0.20: rf_rate = 0.045
 
-    # Convert to monthly returns
-    def to_monthly_returns(daily_prices):
-        if not daily_prices: return pd.Series(dtype=float)
-        df = pd.DataFrame(daily_prices)
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.sort_values('date').set_index('date')
-        monthly = df['close'].resample('MS').last().dropna()
-        return monthly.pct_change().dropna()
+    if len(monthly_returns) < 6:
+        st.warning(f"Limited price history for {ticker}. Risk metrics may be less accurate.")
 
-    monthly_returns = to_monthly_returns(stock_prices)
-    sp500_returns = to_monthly_returns(sp500_prices)
-
-    if len(monthly_returns) < 12:
-        st.error(f"Not enough price history for {ticker}.")
-        st.stop()
-
-    annual_return = monthly_returns.mean() * 12
-    annual_vol = monthly_returns.std() * np.sqrt(12)
-    market_return = sp500_returns.mean() * 12
-    market_vol = sp500_returns.std() * np.sqrt(12)
+    annual_return = monthly_returns.mean() * 12 if len(monthly_returns) > 0 else 0
+    annual_vol = monthly_returns.std() * np.sqrt(12) if len(monthly_returns) > 0 else 0.25
+    market_return = sp500_returns.mean() * 12 if len(sp500_returns) > 0 else 0.10
+    market_vol = sp500_returns.std() * np.sqrt(12) if len(sp500_returns) > 0 else 0.16
 
     cml_slope = (market_return - rf_rate) / market_vol if market_vol > 0 else 0
     cml_expected = rf_rate + cml_slope * annual_vol
@@ -310,15 +370,16 @@ with st.spinner(f"Analyzing {ticker}..."):
         cov_matrix = np.cov(aligned['stock'], aligned['market'])
         beta = cov_matrix[0, 1] / cov_matrix[1, 1] if cov_matrix[1, 1] != 0 else 1.0
         jensens_alpha = annual_return - (rf_rate + beta * (market_return - rf_rate))
-    else: beta = 1.0; jensens_alpha = 0
+    else:
+        beta = 1.0; jensens_alpha = 0
+
     treynor = (annual_return - rf_rate) / beta if beta != 0 else 0
     downside = monthly_returns[monthly_returns < 0]
     downside_std = downside.std() * np.sqrt(12) if len(downside) > 0 else annual_vol
     sortino = (annual_return - rf_rate) / downside_std if downside_std > 0 else 0
 
-    # Max drawdown from daily prices
-    if stock_prices:
-        closes = pd.Series([float(d['close']) for d in sorted(stock_prices, key=lambda x: x['date'])])
+    if data['prices']:
+        closes = pd.Series([float(d['close']) for d in sorted(data['prices'], key=lambda x: x['date'])])
         cum = closes / closes.iloc[0]
         rmx = cum.cummax()
         dd = (cum - rmx) / rmx
@@ -361,7 +422,6 @@ st.markdown("---")
 st.markdown(f"## {company_name}")
 st.markdown(f"**${ticker}** · {sector} · ${price} · {mcs}")
 
-# Verdict banner
 st.markdown(f"""<div style="background:{vc}10;border:1px solid {vc}30;border-radius:12px;padding:24px;margin:16px 0;position:relative;overflow:hidden;">
 <div style="position:absolute;top:0;left:0;right:0;height:3px;background:{vc};opacity:0.6;"></div>
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">
@@ -375,23 +435,20 @@ st.markdown(f"""<div style="background:{vc}10;border:1px solid {vc}30;border-rad
 <p style="font-size:40px;font-weight:800;color:{vc};font-family:'IBM Plex Mono',monospace;margin:0;">{score}</p>
 </div></div></div>""", unsafe_allow_html=True)
 
-# Key metrics
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("CML GAP", f"{cml_distance*100:+.1f}%")
 m2.metric("SHARPE", f"{sharpe:.2f}")
 m3.metric("CAGR", f"{revenue_cagr*100:.1f}%")
 m4.metric("RETURN", f"{annual_return*100:.1f}%")
 m5.metric("VOL", f"{annual_vol*100:.1f}%")
-
 st.markdown("---")
 
-# Charts
 left, right = st.columns(2)
 
 with left:
     st.markdown('<p class="section-label">GROWTH</p>', unsafe_allow_html=True)
     st.markdown("### Revenue & Net Income")
-    if years_list:
+    if years_list and revenues_list:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
         x = np.arange(len(years_list)); w = 0.35
         ax1.bar(x - w/2, revenues_list, w, color=BLUE, alpha=0.85, label='Revenue ($B)')
@@ -443,7 +500,6 @@ with right:
 
 st.markdown("---")
 
-# Ratios
 st.markdown('<p class="section-label">HEALTH CHECK</p>', unsafe_allow_html=True)
 st.markdown("### 12 Ratios, Graded")
 r1, r2 = st.columns(2)
@@ -459,8 +515,6 @@ for idx, (section_name, section_ratios) in enumerate(ratio_sections):
             </div>""", unsafe_allow_html=True)
 
 st.markdown("---")
-
-# Risk metrics
 st.markdown('<p class="section-label">RISK METRICS</p>', unsafe_allow_html=True)
 rm1, rm2, rm3, rm4 = st.columns(4)
 rm1.metric("Treynor", f"{treynor:.2f}")
@@ -470,7 +524,6 @@ rm4.metric("Max Drawdown", f"{max_drawdown*100:.1f}%")
 
 st.markdown("---")
 
-# Strengths / Weaknesses
 strengths, weaknesses = [], []
 if cml_distance > 0.01: strengths.append(f'{cml_distance*100:.1f}% above CML')
 elif cml_distance < -0.02: weaknesses.append(f'{abs(cml_distance)*100:.1f}% below CML')
@@ -492,7 +545,6 @@ with s2:
     for w in weaknesses: st.markdown(f"<p style='color:{RED};font-size:14px;'>- {w}</p>", unsafe_allow_html=True)
     if not weaknesses: st.markdown("<p style='color:#4e6380;'>None identified</p>", unsafe_allow_html=True)
 
-# Bottom line
 if verdict in ('STRONG BUY', 'BUY'): bl = f"Math favors {ticker}."
 elif verdict == 'HOLD': bl = f"{ticker} is fairly priced. No strong edge."
 else: bl = f"Index fund likely beats {ticker} at this risk."
