@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
+import requests
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -41,21 +41,70 @@ plt.rcParams.update({
 })
 
 # ══════════════════════════════════════════════════
-# HELPERS (same as your working code)
+# API KEY — put yours in Streamlit secrets or here
 # ══════════════════════════════════════════════════
-def safe_get(df, fields, col=0):
-    if isinstance(fields, str): fields = [fields]
-    for field in fields:
-        try:
-            if field in df.index:
-                loc = df.index.get_loc(field)
-                if isinstance(loc, slice): val = df.iloc[loc.start, col]
-                elif isinstance(loc, np.ndarray): val = df.iloc[np.where(loc)[0][0], col]
-                else: val = df.iloc[loc, col]
-                if pd.notna(val): return float(val)
-        except: continue
-    return None
+# To use Streamlit secrets: go to your app settings on share.streamlit.io,
+# click "Advanced settings" > "Secrets", and add:
+#   FMP_API_KEY = "your_key_here"
+# Or just paste it directly below:
 
+FMP_KEY = st.secrets.get("FMP_API_KEY", "YOUR_KEY_HERE")  # ← replace YOUR_KEY_HERE if not using secrets
+
+BASE = "https://financialmodelingprep.com/api/v3"
+
+# ══════════════════════════════════════════════════
+# DATA FETCHER (cached for 1 hour)
+# ══════════════════════════════════════════════════
+@st.cache_data(ttl=3600, show_spinner=False)
+def fmp_get(url):
+    r = requests.get(url, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def pull_all_data(ticker):
+    # Company profile
+    profile = fmp_get(f"{BASE}/profile/{ticker}?apikey={FMP_KEY}")
+    if not profile:
+        return None, "No data found for this ticker."
+
+    # Income statement (5 years)
+    income = fmp_get(f"{BASE}/income-statement/{ticker}?period=annual&limit=5&apikey={FMP_KEY}")
+    if not income:
+        return None, "No financial statements found."
+
+    # Balance sheet (5 years)
+    balance = fmp_get(f"{BASE}/balance-sheet-statement/{ticker}?period=annual&limit=5&apikey={FMP_KEY}")
+
+    # Cash flow (5 years)
+    cashflow = fmp_get(f"{BASE}/cash-flow-statement/{ticker}?period=annual&limit=5&apikey={FMP_KEY}")
+
+    # Historical daily prices (5 years for returns)
+    prices = fmp_get(f"{BASE}/historical-price-full/{ticker}?timeseries=1260&apikey={FMP_KEY}")
+
+    # S&P 500 prices
+    sp500 = fmp_get(f"{BASE}/historical-price-full/^GSPC?timeseries=1260&apikey={FMP_KEY}")
+
+    # Treasury rate
+    try:
+        treasury = fmp_get(f"{BASE}/treasury?from=2024-01-01&to=2025-12-31&apikey={FMP_KEY}")
+        rf = float(treasury[0]['year10']) / 100 if treasury else 0.045
+    except:
+        rf = 0.045
+
+    return {
+        'profile': profile[0],
+        'income': income,
+        'balance': balance or [],
+        'cashflow': cashflow or [],
+        'prices': prices.get('historical', []) if isinstance(prices, dict) else [],
+        'sp500': sp500.get('historical', []) if isinstance(sp500, dict) else [],
+        'rf_rate': rf,
+    }, None
+
+# ══════════════════════════════════════════════════
+# HELPERS
+# ══════════════════════════════════════════════════
 def safe_div(a, b):
     return a / b if a is not None and b is not None and b != 0 else None
 
@@ -81,6 +130,16 @@ def grade(val, thresholds, reverse=False):
         if val <= d: return 'D', '#ff9f43'
         return 'F', RED
 
+def get_field(data_list, field, idx=0):
+    """Safely get a field from FMP response list."""
+    try:
+        val = data_list[idx].get(field)
+        if val is not None:
+            return float(val)
+    except:
+        pass
+    return None
+
 # ══════════════════════════════════════════════════
 # HEADER + INPUT
 # ══════════════════════════════════════════════════
@@ -95,9 +154,8 @@ with col_in:
 with col_btn:
     run = st.button("**Analyze**", type="primary", use_container_width=True)
 
-# Quick pick buttons
 qcols = st.columns(8)
-for i, t in enumerate(["AAPL","TSLA","MSFT","AMZN","NVDA","GOOGL","META","JPM"]):
+for i, t in enumerate(["AAPL", "TSLA", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "JPM"]):
     with qcols[i]:
         if st.button(t, key=f"q{t}", use_container_width=True):
             ticker = t
@@ -105,10 +163,14 @@ for i, t in enumerate(["AAPL","TSLA","MSFT","AMZN","NVDA","GOOGL","META","JPM"])
 
 ticker = ticker.strip().upper()
 
+if FMP_KEY == "YOUR_KEY_HERE":
+    st.warning("You need a free API key from financialmodelingprep.com. Add it to Streamlit secrets as FMP_API_KEY or paste it in the code.")
+    st.stop()
+
 if not run or not ticker:
     st.markdown("---")
     st.markdown("### What you get")
-    c1,c2,c3,c4,c5 = st.columns(5)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.markdown("**📊 Health Check**\n\n12 ratios graded A-F")
     c2.markdown("**📈 Growth**\n\n5yr CAGR & trend")
     c3.markdown("**📐 CML Position**\n\nAbove or below the line")
@@ -117,50 +179,41 @@ if not run or not ticker:
     st.stop()
 
 # ══════════════════════════════════════════════════
-# RUN ANALYSIS
+# PULL & PROCESS
 # ══════════════════════════════════════════════════
-with st.spinner(f"Pulling data for {ticker}..."):
+with st.spinner(f"Analyzing {ticker}..."):
 
-    # ── PULL DATA ──
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        company_name = info.get('longName', info.get('shortName', ticker))
-        sector = info.get('sector', 'N/A')
-        price = info.get('currentPrice', info.get('regularMarketPrice', info.get('previousClose', 'N/A')))
-        mc = info.get('marketCap', 0)
-        if mc and mc > 1e12: mcs = f'${mc/1e12:.2f}T'
-        elif mc and mc > 1e9: mcs = f'${mc/1e9:.1f}B'
-        else: mcs = 'N/A'
-
-        income_stmt = stock.income_stmt
-        balance_sheet = stock.balance_sheet
-        cash_flow = stock.cashflow
-        if income_stmt.empty:
-            st.error(f"No financial data for {ticker}. Check the ticker symbol.")
-            st.stop()
-        hist = stock.history(period='5y', interval='1mo')
-        if hist.empty:
-            st.error(f"No price history for {ticker}.")
-            st.stop()
-        monthly_returns = hist['Close'].pct_change().dropna()
-    except Exception as e:
-        st.error(f"Error: {e}")
+    data, error = pull_all_data(ticker)
+    if error:
+        st.error(error)
         st.stop()
 
-    # ── RATIOS (exact same code) ──
-    revenue = safe_get(income_stmt, ['Total Revenue', 'Revenue'])
-    gross_profit = safe_get(income_stmt, ['Gross Profit'])
-    operating_income = safe_get(income_stmt, ['Operating Income', 'EBIT'])
-    net_income = safe_get(income_stmt, ['Net Income', 'Net Income Common Stockholders'])
-    interest_expense = safe_get(income_stmt, ['Interest Expense', 'Interest Expense Non Operating'])
-    total_assets = safe_get(balance_sheet, ['Total Assets'])
-    current_assets = safe_get(balance_sheet, ['Current Assets', 'Total Current Assets'])
-    current_liabilities = safe_get(balance_sheet, ['Current Liabilities', 'Total Current Liabilities'])
-    total_debt = safe_get(balance_sheet, ['Total Debt', 'Long Term Debt', 'Total Non Current Liabilities Net Minority Interest'])
-    equity = safe_get(balance_sheet, ['Stockholders Equity', 'Total Stockholders Equity', 'Common Stock Equity', 'Total Equity Gross Minority Interest'])
-    inventory = safe_get(balance_sheet, ['Inventory'])
-    fcf = safe_get(cash_flow, ['Free Cash Flow'])
+    p = data['profile']
+    inc = data['income']
+    bal = data['balance']
+    cf = data['cashflow']
+
+    company_name = p.get('companyName', ticker)
+    sector = p.get('sector', 'N/A')
+    price = p.get('price', 'N/A')
+    mc = p.get('mktCap', 0)
+    if mc and mc > 1e12: mcs = f'${mc/1e12:.2f}T'
+    elif mc and mc > 1e9: mcs = f'${mc/1e9:.1f}B'
+    else: mcs = 'N/A'
+
+    # ── RATIOS from latest year ──
+    revenue = get_field(inc, 'revenue')
+    gross_profit = get_field(inc, 'grossProfit')
+    operating_income = get_field(inc, 'operatingIncome')
+    net_income = get_field(inc, 'netIncome')
+    interest_expense = get_field(inc, 'interestExpense')
+    total_assets = get_field(bal, 'totalAssets')
+    current_assets = get_field(bal, 'totalCurrentAssets')
+    current_liabilities = get_field(bal, 'totalCurrentLiabilities')
+    total_debt = get_field(bal, 'totalDebt') or get_field(bal, 'longTermDebt')
+    equity = get_field(bal, 'totalStockholdersEquity')
+    inventory_val = get_field(bal, 'inventory')
+    fcf = get_field(cf, 'freeCashFlow')
 
     ratio_sections = []
     roe = safe_div(net_income, equity); roa = safe_div(net_income, total_assets)
@@ -173,7 +226,7 @@ with st.spinner(f"Pulling data for {ticker}..."):
         ('Net Margin', fmt_pct(net_margin), *grade(net_margin, (0.20, 0.10, 0.05, 0.02))),
     ]))
     current_ratio = safe_div(current_assets, current_liabilities)
-    quick_ratio = safe_div((current_assets - (inventory or 0)), current_liabilities) if current_assets and current_liabilities else None
+    quick_ratio = safe_div((current_assets - (inventory_val or 0)), current_liabilities) if current_assets and current_liabilities else None
     ratio_sections.append(('LIQUIDITY', [
         ('Current Ratio', fmt_num(current_ratio), *grade(current_ratio, (2.0, 1.5, 1.0, 0.7))),
         ('Quick Ratio', fmt_num(quick_ratio), *grade(quick_ratio, (1.5, 1.0, 0.7, 0.4))),
@@ -195,40 +248,56 @@ with st.spinner(f"Pulling data for {ticker}..."):
     all_ratios = []
     for _, sr in ratio_sections:
         for item in sr: all_ratios.append(item)
-    grade_counts = {'A':0,'B':0,'C':0,'D':0,'F':0}
-    for _,_,g,_ in all_ratios:
+    grade_counts = {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'F': 0}
+    for _, _, g, _ in all_ratios:
         if g in grade_counts: grade_counts[g] += 1
 
-    # ── GROWTH (exact same code) ──
+    # ── GROWTH ──
     years_list, revenues_list, net_incomes_list = [], [], []
-    for i in range(min(income_stmt.shape[1], 5)):
-        col_date = income_stmt.columns[i]
-        yr = col_date.year if hasattr(col_date, 'year') else int(str(col_date)[:4])
-        rev = safe_get(income_stmt, ['Total Revenue', 'Revenue'], i)
-        ni = safe_get(income_stmt, ['Net Income', 'Net Income Common Stockholders'], i)
-        if rev:
-            years_list.append(yr); revenues_list.append(rev / 1e9); net_incomes_list.append((ni or 0) / 1e9)
-    years_list = years_list[::-1]; revenues_list = revenues_list[::-1]; net_incomes_list = net_incomes_list[::-1]
-    n_years = len(revenues_list) - 1
+    for row in reversed(inc[:5]):
+        try:
+            yr = int(row['calendarYear']) if 'calendarYear' in row else int(row['date'][:4])
+            rev = float(row.get('revenue', 0))
+            ni = float(row.get('netIncome', 0))
+            if rev > 0:
+                years_list.append(yr)
+                revenues_list.append(rev / 1e9)
+                net_incomes_list.append(ni / 1e9)
+        except: continue
+
+    n_years = len(revenues_list) - 1 if len(revenues_list) > 1 else 1
     revenue_cagr = (revenues_list[-1] / revenues_list[0]) ** (1 / n_years) - 1 if len(revenues_list) >= 2 and revenues_list[0] > 0 else 0
     yoy_growth = []
     for i in range(1, len(revenues_list)):
         yoy_growth.append((revenues_list[i] - revenues_list[i-1]) / revenues_list[i-1] if revenues_list[i-1] > 0 else 0)
     accelerating = len(yoy_growth) >= 2 and yoy_growth[-1] > yoy_growth[-2]
 
-    # ── CML + RISK (exact same code) ──
+    # ── RETURNS & CML ──
+    stock_prices = data['prices']
+    sp500_prices = data['sp500']
+    rf_rate = data['rf_rate']
+    if rf_rate is None or rf_rate <= 0 or rf_rate > 0.20: rf_rate = 0.045
+
+    # Convert to monthly returns
+    def to_monthly_returns(daily_prices):
+        if not daily_prices: return pd.Series(dtype=float)
+        df = pd.DataFrame(daily_prices)
+        df['date'] = pd.to_datetime(df['date'])
+        df = df.sort_values('date').set_index('date')
+        monthly = df['close'].resample('MS').last().dropna()
+        return monthly.pct_change().dropna()
+
+    monthly_returns = to_monthly_returns(stock_prices)
+    sp500_returns = to_monthly_returns(sp500_prices)
+
+    if len(monthly_returns) < 12:
+        st.error(f"Not enough price history for {ticker}.")
+        st.stop()
+
     annual_return = monthly_returns.mean() * 12
     annual_vol = monthly_returns.std() * np.sqrt(12)
-    sp500 = yf.Ticker('^GSPC')
-    sp500_hist = sp500.history(period='5y', interval='1mo')
-    sp500_returns = sp500_hist['Close'].pct_change().dropna()
     market_return = sp500_returns.mean() * 12
     market_vol = sp500_returns.std() * np.sqrt(12)
-    try:
-        tnx = yf.Ticker('^TNX'); tnx_info = tnx.info
-        rf_rate = tnx_info.get('regularMarketPrice', tnx_info.get('previousClose', 4.5)) / 100
-    except: rf_rate = 0.045
-    if rf_rate is None or rf_rate <= 0 or rf_rate > 0.20: rf_rate = 0.045
 
     cml_slope = (market_return - rf_rate) / market_vol if market_vol > 0 else 0
     cml_expected = rf_rate + cml_slope * annual_vol
@@ -246,16 +315,25 @@ with st.spinner(f"Pulling data for {ticker}..."):
     downside = monthly_returns[monthly_returns < 0]
     downside_std = downside.std() * np.sqrt(12) if len(downside) > 0 else annual_vol
     sortino = (annual_return - rf_rate) / downside_std if downside_std > 0 else 0
-    price_ret = hist['Close'].pct_change().fillna(0)
-    cumulative = (1 + price_ret).cumprod(); rolling_max = cumulative.cummax()
-    drawdown = (cumulative - rolling_max) / rolling_max; max_drawdown = drawdown.min()
-    mvp_vol = market_vol * 0.6; mvp_return = rf_rate + cml_slope * mvp_vol * 0.85
+
+    # Max drawdown from daily prices
+    if stock_prices:
+        closes = pd.Series([float(d['close']) for d in sorted(stock_prices, key=lambda x: x['date'])])
+        cum = closes / closes.iloc[0]
+        rmx = cum.cummax()
+        dd = (cum - rmx) / rmx
+        max_drawdown = dd.min()
+    else:
+        max_drawdown = 0
+
+    mvp_vol = market_vol * 0.6
+    mvp_return = rf_rate + cml_slope * mvp_vol * 0.85
     max_vol_plot = max(annual_vol, market_vol, 0.15) * 1.5
 
-    # ── VERDICT (exact same code) ──
+    # ── VERDICT ──
     score = 50
-    grade_scores_map = {'A': 10, 'B': 6, 'C': 2, 'D': -3, 'F': -8}
-    for _, _, g, _ in all_ratios: score += grade_scores_map.get(g, 0)
+    gs_map = {'A': 10, 'B': 6, 'C': 2, 'D': -3, 'F': -8}
+    for _, _, g, _ in all_ratios: score += gs_map.get(g, 0)
     if cml_distance > 0.03: score += 25
     elif cml_distance > 0.01: score += 12
     elif cml_distance > -0.01: score += 3
@@ -277,16 +355,13 @@ with st.spinner(f"Pulling data for {ticker}..."):
     else: verdict, vc = 'AVOID', RED
 
 # ══════════════════════════════════════════════════
-# DISPLAY EVERYTHING
+# DISPLAY
 # ══════════════════════════════════════════════════
-
 st.markdown("---")
-
-# Company header
 st.markdown(f"## {company_name}")
 st.markdown(f"**${ticker}** · {sector} · ${price} · {mcs}")
 
-# ── VERDICT BANNER ──
+# Verdict banner
 st.markdown(f"""<div style="background:{vc}10;border:1px solid {vc}30;border-radius:12px;padding:24px;margin:16px 0;position:relative;overflow:hidden;">
 <div style="position:absolute;top:0;left:0;right:0;height:3px;background:{vc};opacity:0.6;"></div>
 <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">
@@ -300,7 +375,7 @@ st.markdown(f"""<div style="background:{vc}10;border:1px solid {vc}30;border-rad
 <p style="font-size:40px;font-weight:800;color:{vc};font-family:'IBM Plex Mono',monospace;margin:0;">{score}</p>
 </div></div></div>""", unsafe_allow_html=True)
 
-# ── KEY METRICS ──
+# Key metrics
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("CML GAP", f"{cml_distance*100:+.1f}%")
 m2.metric("SHARPE", f"{sharpe:.2f}")
@@ -310,42 +385,38 @@ m5.metric("VOL", f"{annual_vol*100:.1f}%")
 
 st.markdown("---")
 
-# ── CHARTS SIDE BY SIDE ──
+# Charts
 left, right = st.columns(2)
 
 with left:
     st.markdown('<p class="section-label">GROWTH</p>', unsafe_allow_html=True)
     st.markdown("### Revenue & Net Income")
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    x = np.arange(len(years_list)); w = 0.35
-    ax1.bar(x - w/2, revenues_list, w, color=BLUE, alpha=0.85, label='Revenue ($B)')
-    ax1.bar(x + w/2, net_incomes_list, w, color=ACCENT, alpha=0.85, label='Net Income ($B)')
-    max_rev = max(revenues_list)
-    for bar in ax1.patches[:len(years_list)]:
-        ax1.text(bar.get_x()+bar.get_width()/2, bar.get_height()+max_rev*0.01, f'{bar.get_height():.0f}', ha='center', fontsize=9, color=BLUE)
-    for bar in ax1.patches[len(years_list):]:
-        ax1.text(bar.get_x()+bar.get_width()/2, bar.get_height()+max_rev*0.01, f'{bar.get_height():.0f}', ha='center', fontsize=9, color=ACCENT)
-    ax1.set_xticks(x); ax1.set_xticklabels([str(y) for y in years_list])
-    ax1.set_title('Revenue & Income ($B)', fontsize=12, fontweight='bold', color='white')
-    ax1.set_ylabel('$ Billions'); ax1.legend(fontsize=8, framealpha=0.3)
-
-    if yoy_growth:
-        gx = np.arange(len(yoy_growth)); gc = [ACCENT if g >= 0 else RED for g in yoy_growth]
-        ax2.bar(gx, [g*100 for g in yoy_growth], color=gc, alpha=0.85)
-        ax2.axhline(y=0, color='white', linewidth=0.5, alpha=0.3)
-        ax2.set_xticks(gx); ax2.set_xticklabels([str(y) for y in years_list[1:]])
-        for i, g in enumerate(yoy_growth):
-            ax2.text(i, g*100+(0.3 if g>=0 else -1.2), f'{g*100:.1f}%', ha='center', fontsize=10, fontweight='bold', color=gc[i])
-    ax2.set_title('YoY Growth', fontsize=12, fontweight='bold', color='white')
-    plt.tight_layout()
-    st.pyplot(fig); plt.close()
+    if years_list:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+        x = np.arange(len(years_list)); w = 0.35
+        ax1.bar(x - w/2, revenues_list, w, color=BLUE, alpha=0.85, label='Revenue ($B)')
+        ax1.bar(x + w/2, net_incomes_list, w, color=ACCENT, alpha=0.85, label='Net Income ($B)')
+        max_rev = max(revenues_list) if revenues_list else 1
+        for bar in ax1.patches[:len(years_list)]:
+            ax1.text(bar.get_x()+bar.get_width()/2, bar.get_height()+max_rev*0.01, f'{bar.get_height():.0f}', ha='center', fontsize=9, color=BLUE)
+        for bar in ax1.patches[len(years_list):]:
+            ax1.text(bar.get_x()+bar.get_width()/2, bar.get_height()+max_rev*0.01, f'{bar.get_height():.0f}', ha='center', fontsize=9, color=ACCENT)
+        ax1.set_xticks(x); ax1.set_xticklabels([str(y) for y in years_list])
+        ax1.set_title('Revenue & Income ($B)', fontsize=12, fontweight='bold', color='white'); ax1.set_ylabel('$ Billions'); ax1.legend(fontsize=8, framealpha=0.3)
+        if yoy_growth:
+            gx = np.arange(len(yoy_growth)); gc = [ACCENT if g >= 0 else RED for g in yoy_growth]
+            ax2.bar(gx, [g*100 for g in yoy_growth], color=gc, alpha=0.85)
+            ax2.axhline(y=0, color='white', linewidth=0.5, alpha=0.3)
+            ax2.set_xticks(gx); ax2.set_xticklabels([str(y) for y in years_list[1:]])
+            for i, g in enumerate(yoy_growth):
+                ax2.text(i, g*100+(0.3 if g>=0 else -1.2), f'{g*100:.1f}%', ha='center', fontsize=10, fontweight='bold', color=gc[i])
+        ax2.set_title('YoY Growth', fontsize=12, fontweight='bold', color='white')
+        plt.tight_layout(); st.pyplot(fig); plt.close()
     st.markdown(f"**CAGR ({n_years}Y):** {revenue_cagr*100:.1f}% · **Trend:** {'Accelerating' if accelerating else 'Decelerating'}")
 
 with right:
     st.markdown('<p class="section-label">CML POSITIONING</p>', unsafe_allow_html=True)
     st.markdown("### Capital Market Line")
-
     fig, ax = plt.subplots(figsize=(10, 8))
     cx = np.linspace(0, max_vol_plot, 100); cy = rf_rate + cml_slope * cx
     ax.plot(cx*100, cy*100, color=ACCENT, linewidth=2.5, label='CML', zorder=3)
@@ -367,16 +438,14 @@ with right:
     ax.plot([annual_vol*100]*2, [annual_return*100,cml_expected*100], color=sc, linestyle='--', linewidth=1.5, alpha=0.6)
     ax.set_xlabel('Risk (%)', fontsize=10); ax.set_ylabel('Return (%)', fontsize=10)
     ax.legend(loc='upper left', framealpha=0.3, fontsize=9)
-    plt.tight_layout()
-    st.pyplot(fig); plt.close()
+    plt.tight_layout(); st.pyplot(fig); plt.close()
     st.markdown(f"**Return:** {annual_return*100:.1f}% · **Beta:** {beta:.2f} · **Sharpe:** {sharpe:.2f}")
 
 st.markdown("---")
 
-# ── RATIOS ──
+# Ratios
 st.markdown('<p class="section-label">HEALTH CHECK</p>', unsafe_allow_html=True)
 st.markdown("### 12 Ratios, Graded")
-
 r1, r2 = st.columns(2)
 for idx, (section_name, section_ratios) in enumerate(ratio_sections):
     col = r1 if idx % 2 == 0 else r2
@@ -391,7 +460,7 @@ for idx, (section_name, section_ratios) in enumerate(ratio_sections):
 
 st.markdown("---")
 
-# ── RISK METRICS ──
+# Risk metrics
 st.markdown('<p class="section-label">RISK METRICS</p>', unsafe_allow_html=True)
 rm1, rm2, rm3, rm4 = st.columns(4)
 rm1.metric("Treynor", f"{treynor:.2f}")
@@ -401,7 +470,7 @@ rm4.metric("Max Drawdown", f"{max_drawdown*100:.1f}%")
 
 st.markdown("---")
 
-# ── STRENGTHS / WEAKNESSES ──
+# Strengths / Weaknesses
 strengths, weaknesses = [], []
 if cml_distance > 0.01: strengths.append(f'{cml_distance*100:.1f}% above CML')
 elif cml_distance < -0.02: weaknesses.append(f'{abs(cml_distance)*100:.1f}% below CML')
@@ -416,18 +485,14 @@ if accelerating: strengths.append('Growth accelerating')
 s1, s2 = st.columns(2)
 with s1:
     st.markdown("### Strengths")
-    for s in strengths:
-        st.markdown(f"<p style='color:{ACCENT};font-size:14px;'>+ {s}</p>", unsafe_allow_html=True)
-    if not strengths:
-        st.markdown("<p style='color:#4e6380;'>None identified</p>", unsafe_allow_html=True)
+    for s in strengths: st.markdown(f"<p style='color:{ACCENT};font-size:14px;'>+ {s}</p>", unsafe_allow_html=True)
+    if not strengths: st.markdown("<p style='color:#4e6380;'>None identified</p>", unsafe_allow_html=True)
 with s2:
     st.markdown("### Weaknesses")
-    for w in weaknesses:
-        st.markdown(f"<p style='color:{RED};font-size:14px;'>- {w}</p>", unsafe_allow_html=True)
-    if not weaknesses:
-        st.markdown("<p style='color:#4e6380;'>None identified</p>", unsafe_allow_html=True)
+    for w in weaknesses: st.markdown(f"<p style='color:{RED};font-size:14px;'>- {w}</p>", unsafe_allow_html=True)
+    if not weaknesses: st.markdown("<p style='color:#4e6380;'>None identified</p>", unsafe_allow_html=True)
 
-# ── BOTTOM LINE ──
+# Bottom line
 if verdict in ('STRONG BUY', 'BUY'): bl = f"Math favors {ticker}."
 elif verdict == 'HOLD': bl = f"{ticker} is fairly priced. No strong edge."
 else: bl = f"Index fund likely beats {ticker} at this risk."
