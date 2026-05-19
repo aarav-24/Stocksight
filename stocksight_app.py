@@ -87,7 +87,7 @@ def call_claude(prompt):
     try:
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-sonnet-4-20250514", "max_tokens": 3000,
+            json={"model": "claude-sonnet-4-6", "max_tokens": 3000,
                   "tools": [{"type": "web_search_20250305", "name": "web_search"}],
                   "messages": [{"role": "user", "content": prompt}]},
             timeout=60)
@@ -388,6 +388,67 @@ with tab1:
     <h2 style="color:{vc} !important;font-size:28px;margin:0 0 8px;">{verdict}</h2></div>
     <div style="text-align:center;"><p class="section-label">SCORE</p>
     <p style="font-size:40px;font-weight:800;color:{vc};font-family:'IBM Plex Mono',monospace;margin:0;">{score}</p></div></div></div>""", unsafe_allow_html=True)
+
+    # ── PLAIN ENGLISH VERDICT EXPLANATION ──
+    risk_label = "Low" if annual_vol < 0.20 else "Moderate" if annual_vol < 0.35 else "High"
+    risk_emoji = "🟢" if annual_vol < 0.20 else "🟡" if annual_vol < 0.35 else "🔴"
+    ret_label = "Strong" if annual_return > 0.15 else "Decent" if annual_return > 0.05 else "Weak" if annual_return > 0 else "Negative"
+
+    # Build the reason string
+    if score >= 62:
+        score_reason = f"The score is high because "
+        reasons = []
+        if pillars['fundamentals'] >= 16: reasons.append("the company's financials are healthy")
+        if pillars['cml_risk_adj'] >= 14: reasons.append("it's earning more return than its risk level warrants")
+        if pillars['growth'] >= 10: reasons.append(f"revenue is growing at {revenue_cagr*100:.1f}% per year")
+        if pillars['risk_profile'] >= 14: reasons.append("the risk level is manageable")
+        score_reason += ", ".join(reasons) + "." if reasons else "multiple factors are working in its favor."
+    elif score >= 45:
+        score_reason = f"The score is in the middle because "
+        strengths = []
+        drags = []
+        if pillars['fundamentals'] >= 16: strengths.append("financials are solid")
+        else: drags.append("financials are mixed")
+        if pillars['cml_risk_adj'] >= 12: strengths.append("risk-return tradeoff is fair")
+        else: drags.append("you're not being paid enough for the risk")
+        if pillars['growth'] >= 8: strengths.append("there's some growth")
+        else: drags.append("growth is slow")
+        score_reason += " and ".join(strengths) + ", but " + " and ".join(drags) + "." if strengths and drags else "it's a mixed picture overall."
+    else:
+        score_reason = f"The score is low because "
+        drags = []
+        if pillars['fundamentals'] < 12: drags.append("financial health is poor")
+        if pillars['cml_risk_adj'] < 8: drags.append(f"at {annual_vol*100:.0f}% volatility, a simple index fund would give you better returns")
+        if pillars['growth'] < 5: drags.append("revenue growth is weak or declining")
+        if pillars['risk_profile'] < 10: drags.append(f"the stock dropped {abs(max_drawdown)*100:.0f}% at its worst")
+        score_reason += ", ".join(drags) + "." if drags else "multiple factors are working against it."
+
+    # Investor guidance
+    if score >= 62:
+        investor_line = "Suitable for most investors. Growth and balanced investors will find this attractive."
+    elif score >= 45:
+        investor_line = "Best for patient, balanced investors who can handle some uncertainty. Not ideal if you need high growth or low risk."
+    elif score >= 30:
+        investor_line = "Only for aggressive investors who understand the downside. Conservative and income investors should avoid."
+    else:
+        investor_line = "Not recommended for any investor profile based on current numbers. Consider an index fund instead."
+
+    st.markdown(f"""<div style="background:#0a1020;border:1px solid #1a2744;border-radius:10px;padding:20px;margin:10px 0;">
+    <p style="font-size:15px;color:#f0f4f8;margin:0 0 12px;font-weight:600;">What this means for you</p>
+    <p style="font-size:14px;color:#c0ccd8;margin:0 0 8px;">
+    <b style="color:#f0f4f8;">{company_name}</b> trades at <b style="color:{vc};">${price}</b> with a market cap of <b>{mcs}</b>.
+    Over the past 5 years, it returned roughly <b style="color:{'#00e5a0' if annual_return > 0 else '#ff6b6b'};">{annual_return*100:.1f}% per year</b> ({ret_label}).
+    </p>
+    <p style="font-size:14px;color:#c0ccd8;margin:0 0 8px;">
+    {risk_emoji} <b>Risk Level: {risk_label}</b> — Volatility is {annual_vol*100:.0f}%, meaning in a bad year the stock could swing {annual_vol*100:.0f}% in either direction. The worst drawdown in the last 5 years was <b style="color:#ff6b6b;">{max_drawdown*100:.0f}%</b>. Beta of {beta:.2f} means it moves {'more' if beta > 1.1 else 'less' if beta < 0.9 else 'roughly the same as'} than the overall market.
+    </p>
+    <p style="font-size:14px;color:#c0ccd8;margin:0 0 8px;">
+    {score_reason}
+    </p>
+    <p style="font-size:13px;color:#4e6380;margin:0;font-style:italic;">
+    {investor_line}
+    </p>
+    </div>""", unsafe_allow_html=True)
 
     st.markdown('<p class="section-label">SCORE BREAKDOWN</p>', unsafe_allow_html=True)
     p1,p2,p3,p4 = st.columns(4)
