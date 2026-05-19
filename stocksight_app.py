@@ -82,7 +82,8 @@ def pull_data(ticker_symbol):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def call_claude(prompt):
-    if not CLAUDE_KEY: return None
+    if not CLAUDE_KEY:
+        return "**Error:** No API key found. Add ANTHROPIC_API_KEY to Streamlit secrets."
     try:
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01"},
@@ -92,9 +93,12 @@ def call_claude(prompt):
             timeout=60)
         if r.status_code == 200:
             data = r.json()
-            return "\n".join([c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text'])
-    except: pass
-    return None
+            text = "\n".join([c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text'])
+            return text if text else "API returned empty response."
+        else:
+            return f"**API Error {r.status_code}:** {r.text[:500]}"
+    except Exception as e:
+        return f"**Connection Error:** {str(e)[:300]}"
 
 def safe_get(df, fields, col=0):
     if isinstance(fields, str): fields = [fields]
@@ -224,9 +228,6 @@ def investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, rev
     personas.append(("Income / Dividend Investor","Wants reliable cash flow. Cares about dividend safety and predictability.",cv,cc,cr))
     return personas
 
-# ══════════════════════════════════════════════════
-# HEADER + INPUT (with session state so buttons don't reset)
-# ══════════════════════════════════════════════════
 st.markdown("## ◈ StockSight")
 st.markdown("# Type a ticker. Get the truth.")
 st.markdown("Pulls real financials, runs CML + portfolio math, gives you a straight answer.")
@@ -257,13 +258,8 @@ if not ticker:
     c1.markdown("**📊 Analysis**\n\nRatios, CML, growth, realistic scoring, investor profiles")
     c2.markdown("**⚠️ Risk Assessment**\n\nAI-powered bear case: accounting, competition, concentration")
     c3.markdown("**🔬 Deep Research**\n\nBusiness model, moat, catalysts, asymmetric upside/downside")
-    if not CLAUDE_KEY:
-        st.info("Add ANTHROPIC_API_KEY to Streamlit secrets for AI-powered Risk Assessment and Deep Research.")
     st.stop()
 
-# ══════════════════════════════════════════════════
-# PULL DATA
-# ══════════════════════════════════════════════════
 data, error = pull_data(ticker)
 if error:
     st.error(error)
@@ -284,9 +280,6 @@ else: mcs = 'N/A'
 monthly_returns = hist['Close'].pct_change().dropna()
 sp500_returns = sp_hist['Close'].pct_change().dropna() if sp_hist is not None and not sp_hist.empty else pd.Series(dtype=float)
 
-# ══════════════════════════════════════════════════
-# COMPUTE ALL METRICS
-# ══════════════════════════════════════════════════
 revenue = safe_get(income_stmt, ['Total Revenue', 'Revenue'])
 gross_profit = safe_get(income_stmt, ['Gross Profit'])
 operating_income = safe_get(income_stmt, ['Operating Income', 'EBIT'])
@@ -381,9 +374,6 @@ v = compute_verdict_v2(all_ratios, cml_distance, sharpe, market_sharpe, revenue_
 score = v['score']; verdict = v['verdict']; vc = v['color']; pillars = v['pillars']
 personas = investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, revenue_cagr, max_drawdown, de_ratio)
 
-# ══════════════════════════════════════════════════
-# DISPLAY
-# ══════════════════════════════════════════════════
 st.markdown("---")
 st.markdown(f"## {company_name}")
 st.markdown(f"**${ticker}** · {sector} · {industry} · ${price} · {mcs}")
@@ -410,15 +400,12 @@ with tab1:
     if pillars['fundamentals'] >= 18: st.markdown(f"**Fundamentals ({pillars['fundamentals']}/25):** Strong. {grade_counts.get('A',0)} ratios graded A.")
     elif pillars['fundamentals'] >= 12: st.markdown(f"**Fundamentals ({pillars['fundamentals']}/25):** Decent but not exceptional. Mix of grades.")
     else: st.markdown(f"**Fundamentals ({pillars['fundamentals']}/25):** Weak. {grade_counts.get('F',0)} F-grades. Profitability or solvency issues.")
-
     if cml_distance > 0.02: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** {cml_distance*100:.1f}% above CML. Earning more than risk warrants. Sharpe {sharpe:.2f} vs market {market_sharpe:.2f}.")
     elif cml_distance > -0.02: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** On the CML ({cml_distance*100:+.1f}%). Fair tradeoff. Sharpe {sharpe:.2f}.")
     else: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** {abs(cml_distance)*100:.1f}% below CML. Index+treasury would yield {cml_expected*100:.1f}% vs {annual_return*100:.1f}%. Sharpe {sharpe:.2f} trails market {market_sharpe:.2f}.")
-
     if revenue_cagr > 0.10: st.markdown(f"**Growth ({pillars['growth']}/25):** Revenue growing {revenue_cagr*100:.1f}%/yr. {'Accelerating.' if accelerating else 'Decelerating.'}")
     elif revenue_cagr > 0: st.markdown(f"**Growth ({pillars['growth']}/25):** Modest {revenue_cagr*100:.1f}% CAGR. {'Improving.' if accelerating else 'Weakening.'}")
     else: st.markdown(f"**Growth ({pillars['growth']}/25):** Revenue declining {revenue_cagr*100:.1f}%/yr. Red flag.")
-
     if annual_vol < 0.20: st.markdown(f"**Risk ({pillars['risk_profile']}/25):** Low vol ({annual_vol*100:.0f}%), drawdown {max_drawdown*100:.0f}%, beta {beta:.2f}. Calm ride.")
     elif annual_vol < 0.35: st.markdown(f"**Risk ({pillars['risk_profile']}/25):** Moderate vol ({annual_vol*100:.0f}%), drawdown {max_drawdown*100:.0f}%, beta {beta:.2f}. Some bumps.")
     else: st.markdown(f"**Risk ({pillars['risk_profile']}/25):** High vol ({annual_vol*100:.0f}%), drawdown {max_drawdown*100:.0f}%, beta {beta:.2f}. Swings hard.")
@@ -515,37 +502,29 @@ with tab1:
 with tab2:
     st.markdown("### ⚠️ Risk Assessment")
     st.markdown(f"AI-generated bear case for **{company_name}**.")
-    if not CLAUDE_KEY:
-        st.info("Add ANTHROPIC_API_KEY to Streamlit secrets to enable this.")
-    else:
-        if st.button("Generate Risk Assessment", key="risk_btn", type="primary"):
-            with st.spinner("Researching risks... (30-45 seconds)"):
-                result = call_claude(f"""Search the web for recent bear cases and risks about {company_name} ({ticker}).
+    if st.button("Generate Risk Assessment", key="risk_btn", type="primary"):
+        with st.spinner("Researching risks... (30-45 seconds)"):
+            result = call_claude(f"""Search the web for recent bear cases and risks about {company_name} ({ticker}).
 Write a skeptical risk assessment covering:
 1. ACCOUNTING & FINANCIAL RISKS: Red flags in reporting? Aggressive revenue recognition? Off-balance-sheet liabilities?
 2. CUSTOMER & REVENUE CONCENTRATION: Dependent on few customers/products/geographies? What if biggest source shrinks 20%?
 3. COMPETITIVE THREATS: Who's taking market share? Disruptive technologies? Name specific competitors.
 End with BEAR CASE SUMMARY: If everything goes wrong in 2 years, what's the downside? Be specific with numbers.""")
-                if result: st.markdown(result)
-                else: st.error("Could not generate. Check API key.")
+            st.markdown(result)
 
 with tab3:
     st.markdown("### 🔬 Deep Research Report")
     st.markdown(f"AI-generated analysis of **{company_name}**.")
-    if not CLAUDE_KEY:
-        st.info("Add ANTHROPIC_API_KEY to Streamlit secrets to enable this.")
-    else:
-        if st.button("Generate Deep Research", key="research_btn", type="primary"):
-            with st.spinner("Deep research... (45-60 seconds)"):
-                result = call_claude(f"""Search the web for comprehensive info about {company_name} ({ticker}, {sector}).
+    if st.button("Generate Deep Research", key="research_btn", type="primary"):
+        with st.spinner("Deep research... (45-60 seconds)"):
+            result = call_claude(f"""Search the web for comprehensive info about {company_name} ({ticker}, {sector}).
 Write a research report:
 1. BUSINESS MODEL: How do they make money? Revenue mix? Who pays them?
 2. MOAT & COMPETITION: Top 3 competitors. Technological advantage? Rate: Strong/Moderate/Weak Moat.
 3. CATALYSTS (12 months): Product launches, regulatory, partnerships? Street bullish or bearish?
 4. ASYMMETRY CHECK: Realistic downside floor vs upside ceiling. Is risk/reward asymmetric? Priced for perfection or disaster?
 Use real numbers and analyst targets.""")
-                if result: st.markdown(result)
-                else: st.error("Could not generate. Check API key.")
+            st.markdown(result)
 
 st.markdown("---")
 st.markdown('<p style="text-align:center;font-size:11px;color:#4e6380;">STOCKSIGHT — not financial advice, just math and AI</p>', unsafe_allow_html=True)
