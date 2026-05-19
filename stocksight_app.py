@@ -87,10 +87,9 @@ def call_claude(prompt):
     try:
         r = requests.post("https://api.anthropic.com/v1/messages",
             headers={"Content-Type": "application/json", "x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01"},
-            json={"model": "claude-sonnet-4-6", "max_tokens": 3000,
-                  "tools": [{"type": "web_search_20250305", "name": "web_search"}],
+            json={"model": "claude-haiku-4-5-20251001", "max_tokens": 2000,
                   "messages": [{"role": "user", "content": prompt}]},
-            timeout=60)
+            timeout=45)
         if r.status_code == 200:
             data = r.json()
             text = "\n".join([c.get('text', '') for c in data.get('content', []) if c.get('type') == 'text'])
@@ -564,27 +563,26 @@ with tab2:
     st.markdown("### ⚠️ Risk Assessment")
     st.markdown(f"AI-generated bear case for **{company_name}**.")
     if st.button("Generate Risk Assessment", key="risk_btn", type="primary"):
-        with st.spinner("Researching risks... (30-45 seconds)"):
-            result = call_claude(f"""Search the web for recent bear cases and risks about {company_name} ({ticker}).
-Write a skeptical risk assessment covering:
-1. ACCOUNTING & FINANCIAL RISKS: Red flags in reporting? Aggressive revenue recognition? Off-balance-sheet liabilities?
-2. CUSTOMER & REVENUE CONCENTRATION: Dependent on few customers/products/geographies? What if biggest source shrinks 20%?
-3. COMPETITIVE THREATS: Who's taking market share? Disruptive technologies? Name specific competitors.
-End with BEAR CASE SUMMARY: If everything goes wrong in 2 years, what's the downside? Be specific with numbers.""")
+        with st.spinner("Generating risk assessment..."):
+            result = call_claude(f"""Write a skeptical risk assessment for {company_name} (ticker: {ticker}, sector: {sector}, price: ${price}, market cap: {mcs}).
+Cover 3 areas concisely:
+1. ACCOUNTING & FINANCIAL RISKS: Red flags? Debt concerns?
+2. CUSTOMER & REVENUE CONCENTRATION: Dependent on few customers/products?
+3. COMPETITIVE THREATS: Who's taking market share? Name competitors.
+End with BEAR CASE SUMMARY: Realistic downside in 2 years.""")
             st.markdown(result)
 
 with tab3:
     st.markdown("### 🔬 Deep Research Report")
     st.markdown(f"AI-generated analysis of **{company_name}**.")
     if st.button("Generate Deep Research", key="research_btn", type="primary"):
-        with st.spinner("Deep research... (45-60 seconds)"):
-            result = call_claude(f"""Search the web for comprehensive info about {company_name} ({ticker}, {sector}).
-Write a research report:
-1. BUSINESS MODEL: How do they make money? Revenue mix? Who pays them?
-2. MOAT & COMPETITION: Top 3 competitors. Technological advantage? Rate: Strong/Moderate/Weak Moat.
-3. CATALYSTS (12 months): Product launches, regulatory, partnerships? Street bullish or bearish?
-4. ASYMMETRY CHECK: Realistic downside floor vs upside ceiling. Is risk/reward asymmetric? Priced for perfection or disaster?
-Use real numbers and analyst targets.""")
+        with st.spinner("Generating research report..."):
+            result = call_claude(f"""Write a concise research report for {company_name} (ticker: {ticker}, sector: {sector}, price: ${price}, market cap: {mcs}).
+Cover 4 areas:
+1. BUSINESS MODEL: How do they make money? Revenue mix?
+2. MOAT & COMPETITION: Top 3 competitors. Rate moat: Strong/Moderate/Weak.
+3. CATALYSTS (12 months): Upcoming product launches, partnerships, macro trends?
+4. ASYMMETRY: Downside floor vs upside ceiling. Is risk/reward favorable?""")
             st.markdown(result)
 
 st.markdown("---")
