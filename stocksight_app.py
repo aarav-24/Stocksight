@@ -40,9 +40,6 @@ try:
 except Exception:
     CLAUDE_KEY = None
 
-# ══════════════════════════════════════════════════
-# DATA PULLER — NO custom session, plain yf.Ticker like your working code
-# ══════════════════════════════════════════════════
 @st.cache_data(ttl=3600, show_spinner="Pulling financial data...")
 def pull_data(ticker_symbol):
     for attempt in range(3):
@@ -83,9 +80,6 @@ def pull_data(ticker_symbol):
             return None, f"Failed after 3 attempts: {str(e)[:200]}"
     return None, "Unknown error."
 
-# ══════════════════════════════════════════════════
-# AI CALLER
-# ══════════════════════════════════════════════════
 @st.cache_data(ttl=3600, show_spinner=False)
 def call_claude(prompt):
     if not CLAUDE_KEY: return None
@@ -102,9 +96,6 @@ def call_claude(prompt):
     except: pass
     return None
 
-# ══════════════════════════════════════════════════
-# HELPERS — identical to your working Jupyter code
-# ══════════════════════════════════════════════════
 def safe_get(df, fields, col=0):
     if isinstance(fields, str): fields = [fields]
     for field in fields:
@@ -143,16 +134,12 @@ def grade(val, thresholds, reverse=False):
         if val <= d: return 'D', '#ff9f43'
         return 'F', RED
 
-# ══════════════════════════════════════════════════
-# REALISTIC SCORING ENGINE (v2)
-# ══════════════════════════════════════════════════
 def compute_verdict_v2(all_ratios, cml_distance, sharpe, market_sharpe, revenue_cagr, accelerating, annual_return, annual_vol, beta, max_drawdown):
     grade_pts = {'A': 4, 'B': 3, 'C': 2, 'D': 1, 'F': 0, 'N/A': 1.5}
     total_grade_pts = sum(grade_pts.get(r[2], 0) for r in all_ratios)
     max_possible = len(all_ratios) * 4
     fundamental_pct = total_grade_pts / max_possible if max_possible > 0 else 0.5
     fundamental_score = fundamental_pct * 25
-
     cml_score = 0
     if cml_distance > 0.05: cml_score += 10
     elif cml_distance > 0.02: cml_score += 7
@@ -167,7 +154,6 @@ def compute_verdict_v2(all_ratios, cml_distance, sharpe, market_sharpe, revenue_
     elif sv > 0.1: cml_score += 5
     elif sv > -0.1: cml_score += 3
     cml_score = min(cml_score, 25)
-
     growth_score = 0
     if revenue_cagr > 0.20: growth_score += 12
     elif revenue_cagr > 0.10: growth_score += 9
@@ -178,7 +164,6 @@ def compute_verdict_v2(all_ratios, cml_distance, sharpe, market_sharpe, revenue_
     else: growth_score += 1
     if revenue_cagr < -0.05: growth_score = max(growth_score - 5, 0)
     growth_score = min(growth_score, 25)
-
     risk_score = 0
     if annual_vol < 0.15: risk_score += 8
     elif annual_vol < 0.25: risk_score += 6
@@ -197,7 +182,6 @@ def compute_verdict_v2(all_ratios, cml_distance, sharpe, market_sharpe, revenue_
     elif annual_return > 0.05: risk_score += 2
     elif annual_return < 0: risk_score = max(risk_score - 3, 0)
     risk_score = min(risk_score, 25)
-
     total = round(fundamental_score + cml_score + growth_score + risk_score)
     total = max(0, min(100, total))
     if total >= 78: verdict, vc = 'STRONG BUY', ACCENT
@@ -209,9 +193,6 @@ def compute_verdict_v2(all_ratios, cml_distance, sharpe, market_sharpe, revenue_
         'fundamentals': round(fundamental_score, 1), 'cml_risk_adj': round(cml_score, 1),
         'growth': round(growth_score, 1), 'risk_profile': round(risk_score, 1)}}
 
-# ══════════════════════════════════════════════════
-# INVESTOR PERSONAS
-# ══════════════════════════════════════════════════
 def investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, revenue_cagr, max_drawdown, de_ratio):
     personas = []
     dd = abs(max_drawdown) if max_drawdown else 0
@@ -222,7 +203,6 @@ def investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, rev
     else:
         cv,cc,cr = "POOR FIT",RED,f"Too volatile ({annual_vol*100:.0f}%) with {dd*100:.0f}% max drawdown."
     personas.append(("Conservative Investor","Prioritizes capital preservation. Wants steady returns, low drawdowns.",cv,cc,cr))
-
     if sharpe > 0.4 and annual_return > 0.05:
         cv,cc,cr = "GOOD FIT",ACCENT,f"Decent risk-adjusted returns (Sharpe {sharpe:.2f}). Balanced between growth and stability."
     elif sharpe > 0.2 and annual_return > 0:
@@ -230,7 +210,6 @@ def investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, rev
     else:
         cv,cc,cr = "POOR FIT",RED,f"Sharpe of {sharpe:.2f} means risk isn't being compensated well."
     personas.append(("Balanced Investor","Wants reasonable returns without stomach-churning volatility.",cv,cc,cr))
-
     if revenue_cagr > 0.10 and annual_return > 0.15:
         cv,cc,cr = "GOOD FIT",ACCENT,f"Strong revenue growth ({revenue_cagr*100:.1f}% CAGR) with {annual_return*100:.1f}% returns. High risk, high reward."
     elif revenue_cagr > 0.05 or annual_return > 0.10:
@@ -238,7 +217,6 @@ def investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, rev
     else:
         cv,cc,cr = "POOR FIT",RED,f"Revenue CAGR of {revenue_cagr*100:.1f}% won't satisfy aggressive growth seekers."
     personas.append(("Aggressive / Growth Investor","Chases high returns. Comfortable with big drawdowns if upside is there.",cv,cc,cr))
-
     if annual_vol < 0.25 and (de_ratio is None or de_ratio < 2.0):
         cv,cc,cr = "CHECK DIVIDEND",BLUE,"Stable enough for income investors. Check the dividend yield separately."
     else:
@@ -247,29 +225,32 @@ def investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, rev
     return personas
 
 # ══════════════════════════════════════════════════
-# HEADER + INPUT
+# HEADER + INPUT (with session state so buttons don't reset)
 # ══════════════════════════════════════════════════
 st.markdown("## ◈ StockSight")
 st.markdown("# Type a ticker. Get the truth.")
 st.markdown("Pulls real financials, runs CML + portfolio math, gives you a straight answer.")
 st.markdown("")
 
+if 'active_ticker' not in st.session_state:
+    st.session_state.active_ticker = ""
+
 col_in, col_btn = st.columns([5, 1])
 with col_in:
-    ticker = st.text_input("Stock ticker", value="", placeholder="AAPL", label_visibility="collapsed")
+    ticker_input = st.text_input("Stock ticker", value="", placeholder="AAPL", label_visibility="collapsed")
 with col_btn:
-    run = st.button("**Analyze**", type="primary", use_container_width=True)
+    if st.button("**Analyze**", type="primary", use_container_width=True):
+        st.session_state.active_ticker = ticker_input.strip().upper()
 
 qcols = st.columns(8)
 for i, t in enumerate(["AAPL","TSLA","MSFT","AMZN","NVDA","GOOGL","META","JPM"]):
     with qcols[i]:
         if st.button(t, key=f"q{t}", use_container_width=True):
-            ticker = t
-            run = True
+            st.session_state.active_ticker = t
 
-ticker = ticker.strip().upper()
+ticker = st.session_state.active_ticker
 
-if not run or not ticker:
+if not ticker:
     st.markdown("---")
     st.markdown("### What you get")
     c1,c2,c3 = st.columns(3)
@@ -304,7 +285,7 @@ monthly_returns = hist['Close'].pct_change().dropna()
 sp500_returns = sp_hist['Close'].pct_change().dropna() if sp_hist is not None and not sp_hist.empty else pd.Series(dtype=float)
 
 # ══════════════════════════════════════════════════
-# COMPUTE ALL METRICS — same as your working Jupyter code
+# COMPUTE ALL METRICS
 # ══════════════════════════════════════════════════
 revenue = safe_get(income_stmt, ['Total Revenue', 'Revenue'])
 gross_profit = safe_get(income_stmt, ['Gross Profit'])
@@ -401,7 +382,7 @@ score = v['score']; verdict = v['verdict']; vc = v['color']; pillars = v['pillar
 personas = investor_personas(annual_return, annual_vol, beta, sharpe, cml_distance, revenue_cagr, max_drawdown, de_ratio)
 
 # ══════════════════════════════════════════════════
-# DISPLAY — TABS
+# DISPLAY
 # ══════════════════════════════════════════════════
 st.markdown("---")
 st.markdown(f"## {company_name}")
@@ -432,7 +413,7 @@ with tab1:
 
     if cml_distance > 0.02: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** {cml_distance*100:.1f}% above CML. Earning more than risk warrants. Sharpe {sharpe:.2f} vs market {market_sharpe:.2f}.")
     elif cml_distance > -0.02: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** On the CML ({cml_distance*100:+.1f}%). Fair tradeoff. Sharpe {sharpe:.2f}.")
-    else: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** {abs(cml_distance)*100:.1f}% below CML. Index+treasury mix would yield {cml_expected*100:.1f}% vs {annual_return*100:.1f}%. Sharpe {sharpe:.2f} trails market {market_sharpe:.2f}.")
+    else: st.markdown(f"**CML ({pillars['cml_risk_adj']}/25):** {abs(cml_distance)*100:.1f}% below CML. Index+treasury would yield {cml_expected*100:.1f}% vs {annual_return*100:.1f}%. Sharpe {sharpe:.2f} trails market {market_sharpe:.2f}.")
 
     if revenue_cagr > 0.10: st.markdown(f"**Growth ({pillars['growth']}/25):** Revenue growing {revenue_cagr*100:.1f}%/yr. {'Accelerating.' if accelerating else 'Decelerating.'}")
     elif revenue_cagr > 0: st.markdown(f"**Growth ({pillars['growth']}/25):** Modest {revenue_cagr*100:.1f}% CAGR. {'Improving.' if accelerating else 'Weakening.'}")
