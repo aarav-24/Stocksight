@@ -52,12 +52,6 @@ def pull_data(ticker_symbol):
             income = stock.income_stmt
             balance = stock.balance_sheet
             cashflow = stock.cashflow
-            try:
-                q_income = stock.quarterly_income_stmt
-                holders = stock.major_holders
-            except:
-                q_income = None
-                holders = None
             if income is None or income.empty:
                 return None, f"No financial statements for {ticker_symbol}."
             time.sleep(2)
@@ -77,8 +71,7 @@ def pull_data(ticker_symbol):
             except: pass
             return {
                 'info': info, 'income': income, 'balance': balance,
-                'cashflow': cashflow, 'q_income': q_income, 'holders': holders,
-                'hist': hist, 'sp_hist': sp_hist, 'rf': rf,
+                'cashflow': cashflow, 'hist': hist, 'sp_hist': sp_hist, 'rf': rf,
             }, None
         except Exception as e:
             if attempt < 2:
@@ -273,7 +266,6 @@ if error:
 
 info = data['info']; income_stmt = data['income']; balance_sheet = data['balance']
 cash_flow = data['cashflow']; hist = data['hist']; sp_hist = data['sp_hist']; rf_rate = data['rf']
-q_income = data.get('q_income'); holders = data.get('holders')
 if rf_rate is None or rf_rate <= 0 or rf_rate > 0.20: rf_rate = 0.045
 
 company_name = info.get('longName', info.get('shortName', ticker))
@@ -478,100 +470,11 @@ with tab1:
     elif annual_vol < 0.35: st.markdown(f"**Risk ({pillars['risk_profile']}/25):** Moderate vol ({annual_vol*100:.0f}%), drawdown {max_drawdown*100:.0f}%, beta {beta:.2f}. Some bumps.")
     else: st.markdown(f"**Risk ({pillars['risk_profile']}/25):** High vol ({annual_vol*100:.0f}%), drawdown {max_drawdown*100:.0f}%, beta {beta:.2f}. Swings hard.")
 
-    # ── WHY THIS VERDICT AND NOT HIGHER/LOWER ──
-    st.markdown("---")
-    if verdict == 'STRONG BUY':
-        why_verdict = f"**Why STRONG BUY?** All four pillars are firing. Strong financials, the stock sits above the Capital Market Line (meaning you're getting paid more than the risk deserves), revenue is growing, and the risk is manageable. This is rare — most stocks don't score above 78."
-        what_would_change = "**What could downgrade it:** A major revenue decline, margin compression, or a market crash that spikes volatility would drag this lower."
-    elif verdict == 'BUY':
-        why_verdict = f"**Why BUY and not STRONG BUY?** The fundamentals and growth are solid, but something is holding it back — {'high volatility and drawdown risk' if pillars['risk_profile'] < 15 else 'the risk-adjusted return could be better' if pillars['cml_risk_adj'] < 15 else 'growth is decent but not exceptional'}. To reach STRONG BUY, it needs to score 78+ across all pillars."
-        what_would_change = f"**What would make it STRONG BUY:** {'Lower volatility or smaller drawdowns' if pillars['risk_profile'] < 15 else 'Better Sharpe ratio vs the market' if pillars['cml_risk_adj'] < 15 else 'Faster revenue growth'}."
-    elif verdict == 'HOLD':
-        why_verdict = f"**Why HOLD and not BUY?** The stock has some positives but the math doesn't strongly favor it. "
-        if pillars['cml_risk_adj'] < 10:
-            why_verdict += f"The main drag: at {annual_vol*100:.0f}% volatility, you're taking on significant risk but the {annual_return*100:.1f}% return doesn't compensate enough. A simple S&P 500 index fund gives you a better risk-return tradeoff. "
-        if pillars['risk_profile'] < 12:
-            why_verdict += f"The stock dropped {abs(max_drawdown)*100:.0f}% at its worst — that kind of drawdown is painful even if the long-term return looks decent. "
-        if pillars['growth'] < 8:
-            why_verdict += f"Revenue growth of {revenue_cagr*100:.1f}% isn't exciting enough to justify the risk. "
-        what_would_change = f"**What would make it BUY:** Needs to score 62+. That means {'better risk-adjusted returns (higher Sharpe)' if pillars['cml_risk_adj'] < 12 else 'faster revenue growth' if pillars['growth'] < 10 else 'lower volatility'}."
-    elif verdict == 'UNDERPERFORM':
-        why_verdict = f"**Why UNDERPERFORM?** Multiple pillars are weak. {'Financials have issues — too many D/F grades. ' if pillars['fundamentals'] < 12 else ''}{'The risk-return math is bad — you can get similar or better returns from safer investments. ' if pillars['cml_risk_adj'] < 8 else ''}{'Revenue growth is too slow or negative. ' if pillars['growth'] < 5 else ''}{'The stock is too volatile with ugly drawdowns. ' if pillars['risk_profile'] < 10 else ''}"
-        what_would_change = "**What would improve it:** The company needs to show improving financials, better margins, or consistent revenue growth for at least 2-3 quarters."
-    else:
-        why_verdict = f"**Why AVOID?** The numbers are clearly negative. {'Terrible financial health. ' if pillars['fundamentals'] < 8 else ''}{'You lose money on a risk-adjusted basis. ' if pillars['cml_risk_adj'] < 5 else ''}{'Revenue is shrinking. ' if pillars['growth'] < 3 else ''}{'Extreme volatility and drawdowns. ' if pillars['risk_profile'] < 8 else ''}An index fund would almost certainly outperform at lower risk."
-        what_would_change = "**What would improve it:** A fundamental turnaround — new management, cost cutting, or a major product catalyst."
-
-    st.markdown(f"""<div style="background:#0a1020;border:1px solid #1a2744;border-radius:10px;padding:18px 20px;margin:10px 0;">
-    <p style="font-size:14px;color:#c0ccd8;margin:0 0 10px;">{why_verdict}</p>
-    <p style="font-size:13px;color:#4e6380;margin:0;">{what_would_change}</p>
-    </div>""", unsafe_allow_html=True)
-
-    st.markdown("*Our verdict uses 4 pillars of math: financial ratio grades, Capital Market Line positioning (are you paid for the risk?), revenue growth trajectory, and volatility/drawdown risk. No opinions, no sentiment — just numbers.*")
-
-    # ── PROS AND CONS ──
-    st.markdown("---")
-    st.markdown("### Pros & Cons")
-    pros = []
-    cons = []
-    if roe and roe > 0.15: pros.append(f"Strong return on equity ({roe*100:.1f}%)")
-    if gm and gm > 0.40: pros.append(f"Healthy gross margin ({gm*100:.1f}%)")
-    if nm and nm > 0.10: pros.append(f"Solid net margin ({nm*100:.1f}%)")
-    if revenue_cagr > 0.08: pros.append(f"Growing revenue at {revenue_cagr*100:.1f}% per year")
-    elif revenue_cagr > 0.03: pros.append(f"Modest revenue growth ({revenue_cagr*100:.1f}% CAGR)")
-    if accelerating: pros.append("Revenue growth is accelerating (latest year faster than prior)")
-    if cml_distance > 0.01: pros.append(f"Above the CML — earning {cml_distance*100:.1f}% more than risk warrants")
-    if sharpe > market_sharpe: pros.append(f"Sharpe ratio ({sharpe:.2f}) beats the S&P 500 ({market_sharpe:.2f})")
-    if jensens_alpha > 0.02: pros.append(f"Positive alpha ({jensens_alpha*100:.1f}%) — beating expectations")
-    if annual_vol < 0.25: pros.append(f"Relatively low volatility ({annual_vol*100:.0f}%)")
-    if cr_val and cr_val > 1.5: pros.append(f"Strong liquidity (current ratio {cr_val:.1f})")
-    if fm_val and fm_val > 0.10: pros.append(f"Healthy free cash flow margin ({fm_val*100:.1f}%)")
-
-    if revenue_cagr < 0: cons.append(f"Revenue is declining ({revenue_cagr*100:.1f}% per year)")
-    elif revenue_cagr < 0.03: cons.append(f"Very slow revenue growth ({revenue_cagr*100:.1f}%)")
-    if not accelerating and len(yoy_growth) >= 2: cons.append("Revenue growth is decelerating")
-    if cml_distance < -0.02: cons.append(f"Below the CML — an index+treasury mix would earn {abs(cml_distance)*100:.1f}% more at same risk")
-    if sharpe < market_sharpe: cons.append(f"Sharpe ratio ({sharpe:.2f}) trails the S&P 500 ({market_sharpe:.2f})")
-    if annual_vol > 0.35: cons.append(f"High volatility ({annual_vol*100:.0f}%) — big price swings")
-    if max_drawdown and abs(max_drawdown) > 0.40: cons.append(f"Severe max drawdown ({max_drawdown*100:.0f}%) in the last 5 years")
-    elif max_drawdown and abs(max_drawdown) > 0.25: cons.append(f"Significant drawdown ({max_drawdown*100:.0f}%) in the last 5 years")
-    if de_ratio and de_ratio > 2.0: cons.append(f"High debt-to-equity ({de_ratio:.1f}x)")
-    if nm and nm < 0.05: cons.append(f"Thin net margin ({nm*100:.1f}%)")
-    if beta and beta > 1.5: cons.append(f"High beta ({beta:.2f}) — amplifies market moves")
-    if jensens_alpha < -0.02: cons.append(f"Negative alpha ({jensens_alpha*100:.1f}%) — underperforming expectations")
-
-    if not pros: pros.append("No strong positives identified")
-    if not cons: cons.append("No major concerns identified")
-
-    pc1, pc2 = st.columns(2)
-    with pc1:
-        for p in pros:
-            st.markdown(f"<p style='color:{ACCENT};font-size:14px;margin:4px 0;'>✓ {p}</p>", unsafe_allow_html=True)
-    with pc2:
-        for c in cons:
-            st.markdown(f"<p style='color:{RED};font-size:14px;margin:4px 0;'>✗ {c}</p>", unsafe_allow_html=True)
-
     st.markdown("---")
     m1,m2,m3,m4,m5 = st.columns(5)
     m1.metric("CML GAP", f"{cml_distance*100:+.1f}%"); m2.metric("SHARPE", f"{sharpe:.2f}")
     m3.metric("CAGR", f"{revenue_cagr*100:.1f}%"); m4.metric("RETURN", f"{annual_return*100:.1f}%"); m5.metric("VOL", f"{annual_vol*100:.1f}%")
     st.markdown("---")
-
-    # ── 5-YEAR STOCK PRICE CHART ──
-    st.markdown("### 5-Year Stock Price")
-    fig, ax = plt.subplots(figsize=(14, 5))
-    price_dates = hist.index
-    price_close = hist['Close']
-    ax.plot(price_dates, price_close, color=ACCENT if annual_return > 0 else RED, linewidth=2, alpha=0.9)
-    ax.fill_between(price_dates, price_close, alpha=0.08, color=ACCENT if annual_return > 0 else RED)
-    first_price = price_close.iloc[0]; last_price = price_close.iloc[-1]
-    ax.scatter([price_dates[0]], [first_price], color='white', s=40, zorder=5)
-    ax.scatter([price_dates[-1]], [last_price], color=ACCENT if last_price > first_price else RED, s=60, zorder=5)
-    total_ret = (last_price / first_price - 1) * 100
-    ax.set_title(f'{ticker} — ${first_price:.0f} → ${last_price:.0f} ({total_ret:+.0f}% over 5Y)', fontsize=13, fontweight='bold', color='white', pad=12)
-    ax.set_ylabel('Price ($)'); ax.tick_params(axis='x', rotation=30)
-    plt.tight_layout(); st.pyplot(fig); plt.close()
-    st.markdown("")
 
     left, right = st.columns(2)
     with left:
@@ -655,167 +558,6 @@ with tab1:
     st.markdown(f"""<div style="text-align:center;padding:20px;background:{vc}0a;border:1px solid {vc}18;border-radius:10px;margin-top:16px;">
     <p class="section-label">BOTTOM LINE</p>
     <p style="font-size:16px;font-weight:600;color:{vc};margin:8px 0 0;">{bl}</p></div>""", unsafe_allow_html=True)
-
-    # ══════════════════════════════════════════════════
-    # SCREENER-STYLE FEATURES
-    # ══════════════════════════════════════════════════
-    st.markdown("---")
-
-    # ── KEY VALUATION METRICS ──
-    st.markdown("### Key Metrics")
-    pe = info.get('trailingPE') or info.get('forwardPE')
-    pb = info.get('priceToBook')
-    ev_ebitda = info.get('enterpriseToEbitda')
-    div_yield = info.get('dividendYield')
-    book_val = info.get('bookValue')
-    eps = info.get('trailingEps')
-    high52 = info.get('fiftyTwoWeekHigh')
-    low52 = info.get('fiftyTwoWeekLow')
-    avg_vol = info.get('averageVolume')
-
-    kv1, kv2, kv3, kv4 = st.columns(4)
-    kv1.metric("P/E Ratio", f"{pe:.1f}" if pe else "N/A")
-    kv2.metric("P/B Ratio", f"{pb:.1f}" if pb else "N/A")
-    kv3.metric("EV/EBITDA", f"{ev_ebitda:.1f}" if ev_ebitda else "N/A")
-    kv4.metric("Dividend Yield", f"{div_yield*100:.2f}%" if div_yield else "N/A")
-    kv5, kv6, kv7, kv8 = st.columns(4)
-    kv5.metric("EPS", f"${eps:.2f}" if eps else "N/A")
-    kv6.metric("Book Value", f"${book_val:.2f}" if book_val else "N/A")
-    kv7.metric("52W High", f"${high52:.2f}" if high52 else "N/A")
-    kv8.metric("52W Low", f"${low52:.2f}" if low52 else "N/A")
-
-    # ── COMPOUNDED GROWTH ──
-    st.markdown("---")
-    st.markdown("### Compounded Growth")
-    if len(revenues_list) >= 2:
-        growth_data = {}
-        if len(revenues_list) >= 4:
-            cagr_3 = (revenues_list[-1] / revenues_list[-4]) ** (1/3) - 1 if revenues_list[-4] > 0 else 0
-            growth_data['3-Year Revenue CAGR'] = f"{cagr_3*100:.1f}%"
-        if len(revenues_list) >= 2:
-            growth_data[f'{n_years}-Year Revenue CAGR'] = f"{revenue_cagr*100:.1f}%"
-        if len(net_incomes_list) >= 2 and net_incomes_list[0] > 0:
-            ni_cagr = (net_incomes_list[-1] / net_incomes_list[0]) ** (1/n_years) - 1
-            growth_data[f'{n_years}-Year Profit CAGR'] = f"{ni_cagr*100:.1f}%"
-        growth_data['Stock Return (5Y annualized)'] = f"{annual_return*100:.1f}%"
-        gc1, gc2 = st.columns(2)
-        items = list(growth_data.items())
-        for i, (k, v) in enumerate(items):
-            col = gc1 if i % 2 == 0 else gc2
-            col.metric(k, v)
-
-    # ── ANNUAL P&L TABLE ──
-    st.markdown("---")
-    with st.expander("📊 Annual Profit & Loss (click to expand)", expanded=False):
-        pl_fields = [
-            ('Total Revenue', ['Total Revenue', 'Revenue']),
-            ('Gross Profit', ['Gross Profit']),
-            ('Operating Income', ['Operating Income', 'EBIT']),
-            ('Net Income', ['Net Income', 'Net Income Common Stockholders']),
-            ('EBITDA', ['EBITDA', 'Normalized EBITDA']),
-        ]
-        pl_data = {}
-        for label, fields in pl_fields:
-            row = {}
-            for i in range(min(income_stmt.shape[1], 5)):
-                col_date = income_stmt.columns[i]
-                yr = col_date.year if hasattr(col_date, 'year') else str(col_date)[:4]
-                val = safe_get(income_stmt, fields, i)
-                row[str(yr)] = f"${val/1e9:.1f}B" if val else "N/A"
-            pl_data[label] = row
-        if pl_data:
-            pl_df = pd.DataFrame(pl_data).T
-            pl_df.columns = [str(c) for c in pl_df.columns]
-            st.dataframe(pl_df, use_container_width=True)
-
-        # Margin trends
-        st.markdown("**Margin Trends**")
-        margin_data = {}
-        for i in range(min(income_stmt.shape[1], 5)):
-            col_date = income_stmt.columns[i]
-            yr = str(col_date.year if hasattr(col_date, 'year') else str(col_date)[:4])
-            rev_i = safe_get(income_stmt, ['Total Revenue', 'Revenue'], i)
-            gp_i = safe_get(income_stmt, ['Gross Profit'], i)
-            op_i = safe_get(income_stmt, ['Operating Income', 'EBIT'], i)
-            ni_i = safe_get(income_stmt, ['Net Income', 'Net Income Common Stockholders'], i)
-            margin_data[yr] = {
-                'Gross Margin': f"{gp_i/rev_i*100:.1f}%" if gp_i and rev_i else "N/A",
-                'Operating Margin': f"{op_i/rev_i*100:.1f}%" if op_i and rev_i else "N/A",
-                'Net Margin': f"{ni_i/rev_i*100:.1f}%" if ni_i and rev_i else "N/A",
-            }
-        if margin_data:
-            m_df = pd.DataFrame(margin_data)
-            st.dataframe(m_df, use_container_width=True)
-
-    # ── ANNUAL BALANCE SHEET TABLE ──
-    with st.expander("🏦 Annual Balance Sheet (click to expand)", expanded=False):
-        bs_fields = [
-            ('Total Assets', ['Total Assets']),
-            ('Current Assets', ['Current Assets', 'Total Current Assets']),
-            ('Total Debt', ['Total Debt', 'Long Term Debt']),
-            ('Current Liabilities', ['Current Liabilities', 'Total Current Liabilities']),
-            ('Equity', ['Stockholders Equity', 'Total Stockholders Equity']),
-            ('Cash & Equivalents', ['Cash And Cash Equivalents', 'Cash Cash Equivalents And Short Term Investments']),
-        ]
-        bs_data = {}
-        for label, fields in bs_fields:
-            row = {}
-            for i in range(min(balance_sheet.shape[1], 5)):
-                col_date = balance_sheet.columns[i]
-                yr = col_date.year if hasattr(col_date, 'year') else str(col_date)[:4]
-                val = safe_get(balance_sheet, fields, i)
-                row[str(yr)] = f"${val/1e9:.1f}B" if val else "N/A"
-            bs_data[label] = row
-        if bs_data:
-            bs_df = pd.DataFrame(bs_data).T
-            st.dataframe(bs_df, use_container_width=True)
-
-    # ── ANNUAL CASH FLOW TABLE ──
-    with st.expander("💰 Annual Cash Flow (click to expand)", expanded=False):
-        cf_fields = [
-            ('Operating Cash Flow', ['Operating Cash Flow', 'Total Cash From Operating Activities']),
-            ('Capital Expenditure', ['Capital Expenditure']),
-            ('Free Cash Flow', ['Free Cash Flow']),
-            ('Dividends Paid', ['Cash Dividends Paid', 'Common Stock Dividend Paid']),
-        ]
-        cf_data = {}
-        for label, fields in cf_fields:
-            row = {}
-            for i in range(min(cash_flow.shape[1], 5)):
-                col_date = cash_flow.columns[i]
-                yr = col_date.year if hasattr(col_date, 'year') else str(col_date)[:4]
-                val = safe_get(cash_flow, fields, i)
-                row[str(yr)] = f"${val/1e9:.1f}B" if val else "N/A"
-            cf_data[label] = row
-        if cf_data:
-            cf_df = pd.DataFrame(cf_data).T
-            st.dataframe(cf_df, use_container_width=True)
-
-    # ── QUARTERLY RESULTS ──
-    if q_income is not None and not q_income.empty:
-        with st.expander("📅 Quarterly Results (click to expand)", expanded=False):
-            q_fields = [
-                ('Revenue', ['Total Revenue', 'Revenue']),
-                ('Operating Income', ['Operating Income', 'EBIT']),
-                ('Net Income', ['Net Income', 'Net Income Common Stockholders']),
-            ]
-            q_data = {}
-            for label, fields in q_fields:
-                row = {}
-                for i in range(min(q_income.shape[1], 6)):
-                    col_date = q_income.columns[i]
-                    qtr = col_date.strftime('%b %Y') if hasattr(col_date, 'strftime') else str(col_date)[:10]
-                    val = safe_get(q_income, fields, i)
-                    row[qtr] = f"${val/1e9:.1f}B" if val else "N/A"
-                q_data[label] = row
-            if q_data:
-                q_df = pd.DataFrame(q_data).T
-                st.dataframe(q_df, use_container_width=True)
-
-    # ── SHAREHOLDING PATTERN ──
-    if holders is not None and not holders.empty:
-        with st.expander("👥 Shareholding Pattern (click to expand)", expanded=False):
-            st.dataframe(holders, use_container_width=True)
 
 with tab2:
     st.markdown("### ⚠️ Risk Assessment")
